@@ -106,7 +106,6 @@ class MovieCreateSchema(BaseModel):
         return v
 
 
-
 class MovieUpdateSchema(BaseModel):
     name: Optional[str] = Field(default=None, max_length=255)
     date: Optional[date] = None
@@ -135,6 +134,3 @@ class MovieUpdateSchema(BaseModel):
                 raise ValueError("Country code must be 2 or 3 uppercase letters")
             values["country"] = country
         return values
-
-
-

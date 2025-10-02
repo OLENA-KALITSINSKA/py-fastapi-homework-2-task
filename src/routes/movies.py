@@ -33,12 +33,10 @@ async def get_movies_list(
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=20),
 ):
-    # Порахувати загальну кількість елементів для пагінації
     count_result = await db.execute(select(func.count(MovieModel.id)))
     total_items = count_result.scalar()
     total_pages = (total_items + per_page - 1) // per_page if total_items else 0
 
-    # Вибірка фільмів для поточної сторінки
     stmt = (
         select(MovieModel)
         .order_by(desc(MovieModel.id))
@@ -48,11 +46,9 @@ async def get_movies_list(
     result = await db.execute(stmt)
     movies = result.scalars().all()
 
-    # Якщо сторінка порожня або база взагалі пуста
     if not movies:
         raise HTTPException(status_code=404, detail="No movies found.")
 
-    # Підготовка даних для відповіді
     movies_data = [
         MovieListItemSchema(
             id=movie.id,
