@@ -1,24 +1,27 @@
 from sqlalchemy.orm import selectinload, joinedload
 from starlette import status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import func, desc
+from sqlalchemy.exc import IntegrityError
+from pydantic import ValidationError
 
 from database.models import (
     CountryModel,
     GenreModel,
     ActorModel,
-    LanguageModel
+    LanguageModel,
+    MovieModel,
 )
+from database import get_db
 from schemas import MovieDetailSchema
-from schemas.movies import MovieUpdateSchema
-from database import get_db, MovieModel
 from schemas.movies import (
     MovieListItemSchema,
     MovieListResponseSchema,
     MovieCreateSchema,
+    MovieUpdateSchema,
 )
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy import func, desc
 
 router = APIRouter(prefix="/movies", tags=["Movies"])
 
@@ -73,11 +76,7 @@ async def get_movies_list(
     )
 
 
-@router.get(
-    "/{movie_id}/",
-    response_model=MovieDetailSchema,
-    status_code=status.HTTP_200_OK
-)
+@router.get("/{movie_id}/", response_model=MovieDetailSchema, status_code=status.HTTP_200_OK)
 async def get_movie(movie_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(MovieModel)
@@ -98,15 +97,14 @@ async def get_movie(movie_id: int, db: AsyncSession = Depends(get_db)):
     return MovieDetailSchema.model_validate(movie)
 
 
-@router.post(
-    "/",
-    response_model=MovieDetailSchema,
-    status_code=status.HTTP_201_CREATED
-)
-async def create_movie(
-        movie_in: MovieCreateSchema,
-        db: AsyncSession = Depends(get_db)
-):
+@router.post("/", response_model=MovieDetailSchema, status_code=status.HTTP_201_CREATED)
+async def create_movie(request: Request, db: AsyncSession = Depends(get_db)):
+    try:
+        payload = await request.json()
+        movie_in = MovieCreateSchema.model_validate(payload)
+    except (ValidationError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid input data.")
+
     stmt = select(MovieModel).where(
         MovieModel.name == movie_in.name, MovieModel.date == movie_in.date
     )
@@ -114,18 +112,17 @@ async def create_movie(
     existing_movie = result.scalar_one_or_none()
     if existing_movie:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=409,
             detail=f"A movie with the name '{movie_in.name}' and "
-            f"release date '{movie_in.date}' already exists.",
+                   f"release date '{movie_in.date}' already exists.",
         )
 
-    country_stmt = select(CountryModel).where(
-        CountryModel.code == movie_in.country
-    )
+    country_code = movie_in.country.upper()
+    country_stmt = select(CountryModel).where(CountryModel.code == country_code)
     result = await db.execute(country_stmt)
     country = result.scalar_one_or_none()
     if not country:
-        country = CountryModel(code=movie_in.country, name=None)
+        country = CountryModel(code=country_code, name=None)
         db.add(country)
         await db.flush()
 
@@ -177,10 +174,15 @@ async def create_movie(
     )
 
     db.add(movie)
-    await db.commit()
-    await db.refresh(
-        movie, attribute_names=["genres", "actors", "languages", "country"]
-    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A movie with the name '{movie_in.name}' and "
+                   f"release date '{movie_in.date}' already exists.",
+        )
+    await db.refresh(movie, attribute_names=["genres", "actors", "languages", "country"])
 
     return MovieDetailSchema.model_validate(movie)
 
@@ -201,24 +203,46 @@ async def delete_movie(movie_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/{movie_id}/", status_code=status.HTTP_200_OK)
-async def update_movie(
-    movie_id: int,
-    movie_data: MovieUpdateSchema,
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(MovieModel).where(MovieModel.id == movie_id)
-    )
+async def update_movie(movie_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(MovieModel).where(MovieModel.id == movie_id))
     movie = result.scalar_one_or_none()
     if not movie:
         raise HTTPException(
             status_code=404, detail="Movie with the given ID was not found."
         )
 
+    try:
+        payload = await request.json()
+        movie_data = MovieUpdateSchema.model_validate(payload)
+    except (ValidationError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid input data.")
+
     update_data = movie_data.model_dump(exclude_unset=True)
+
+    if "name" in update_data or "date" in update_data:
+        new_name = update_data.get("name", movie.name)
+        new_date = update_data.get("date", movie.date)
+        stmt = select(MovieModel).where(
+            MovieModel.name == new_name,
+            MovieModel.date == new_date,
+            MovieModel.id != movie_id,
+        )
+        result = await db.execute(stmt)
+        duplicate = result.scalar_one_or_none()
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A movie with the name '{new_name}' and "
+                       f"release date '{new_date}' already exists.",
+            )
+
     for key, value in update_data.items():
         setattr(movie, key, value)
 
     db.add(movie)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="Invalid input data.")
+
     return {"detail": "Movie updated successfully."}
