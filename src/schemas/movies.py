@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional
-from datetime import date
+from datetime import date, timedelta
 
 from database.models import MovieStatusEnum
 
@@ -10,7 +12,7 @@ class MovieBase(BaseModel):
     date: date
     score: float = Field(ge=0, le=100)
     overview: str
-    status: str
+    status: MovieStatusEnum
     budget: float = Field(ge=0)
     revenue: float = Field(ge=0)
 
@@ -21,7 +23,7 @@ class MovieListItemSchema(BaseModel):
     id: int
     name: str
     date: date
-    score: float
+    score: float = Field(ge=0, le=100)
     overview: str
 
     model_config = {"from_attributes": True}
@@ -83,11 +85,26 @@ class MovieCreateSchema(BaseModel):
     budget: float = Field(ge=0)
     revenue: float = Field(ge=0)
     country: str
-    genres: list[str]
-    actors: list[str]
-    languages: list[str]
+    genres: List[str]
+    actors: List[str]
+    languages: List[str]
 
     model_config = {"from_attributes": True}
+
+    @field_validator("date")
+    @classmethod
+    def date_not_too_far(cls, v: date) -> date:
+        if v > date.today() + timedelta(days=365):
+            raise ValueError("Movie date cannot be more than 1 year in the future")
+        return v
+
+    @field_validator("country")
+    @classmethod
+    def country_alpha3(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Z]{2,3}", v):
+            raise ValueError("Country must be a 3-letter uppercase code")
+        return v
+
 
 
 class MovieUpdateSchema(BaseModel):
@@ -100,3 +117,24 @@ class MovieUpdateSchema(BaseModel):
     revenue: Optional[float] = Field(default=None, ge=0)
 
     model_config = {"from_attributes": True}
+
+    @field_validator("date")
+    @classmethod
+    def date_not_too_far(cls, v: date) -> date:
+        if v > date.today() + timedelta(days=365):
+            raise ValueError("Movie date cannot be more than 1 year in the future")
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_country(cls, values):
+        country = values.get("country")
+        if country is not None:
+            country = country.upper()
+            if not re.fullmatch(r"[A-Z]{2,3}", country):
+                raise ValueError("Country code must be 2 or 3 uppercase letters")
+            values["country"] = country
+        return values
+
+
+

@@ -33,16 +33,12 @@ async def get_movies_list(
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=20),
 ):
+    # Порахувати загальну кількість елементів для пагінації
     count_result = await db.execute(select(func.count(MovieModel.id)))
     total_items = count_result.scalar()
-    total_pages = (total_items + per_page - 1) // per_page
+    total_pages = (total_items + per_page - 1) // per_page if total_items else 0
 
-    if total_items == 0:
-        raise HTTPException(status_code=404, detail="No movies found.")
-
-    if page > total_pages:
-        raise HTTPException(status_code=404, detail="Page out of range")
-
+    # Вибірка фільмів для поточної сторінки
     stmt = (
         select(MovieModel)
         .order_by(desc(MovieModel.id))
@@ -52,6 +48,11 @@ async def get_movies_list(
     result = await db.execute(stmt)
     movies = result.scalars().all()
 
+    # Якщо сторінка порожня або база взагалі пуста
+    if not movies:
+        raise HTTPException(status_code=404, detail="No movies found.")
+
+    # Підготовка даних для відповіді
     movies_data = [
         MovieListItemSchema(
             id=movie.id,
@@ -64,16 +65,8 @@ async def get_movies_list(
     ]
 
     base_url = "/theater"
-    prev_page = (
-        f"{base_url}/movies/?page={page - 1}&per_page={per_page}"
-        if page > 1
-        else None
-    )
-    next_page = (
-        f"{base_url}/movies/?page={page + 1}&per_page={per_page}"
-        if page < total_pages
-        else None
-    )
+    prev_page = f"{base_url}/movies/?page={page - 1}&per_page={per_page}" if page > 1 else None
+    next_page = f"{base_url}/movies/?page={page + 1}&per_page={per_page}" if page < total_pages else None
 
     return MovieListResponseSchema(
         movies=movies_data,
